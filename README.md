@@ -148,7 +148,7 @@ loss/metric correctness. They skip automatically if TensorFlow is not installed.
 
 ```bibtex
 @software{reddy2026ecaldnet,
-  author = {Rohith Reddy},
+  author = {Manpreet Singh, Sai Deekshith Lekkalla, Rohith Reddy Bellibatlu, Manmeet Singh Kapoor},
   title  = {ECA-LDNet: Efficient Channel-Attention Lightweight Dehazing Network},
   year   = {2026},
   url    = {https://github.com/manpreet28111995/Image-Dehazing-using-ECA-LDNet}
