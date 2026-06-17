@@ -90,7 +90,7 @@ def _eval_dir(model, hazy_dir, gt_dir, limit=None):
         out["lpips"] = float(np.mean(L))
     return out
 
-
+'''
 def _train_one(flags, tr, va, epochs, batch, out_dir, label):
     import tensorflow as tf
     import os
@@ -99,6 +99,7 @@ def _train_one(flags, tr, va, epochs, batch, out_dir, label):
     from eca_ldnet.model import build_eca_ldnet
 
     tf.keras.backend.clear_session()
+    
     model = build_eca_ldnet(name="ablation", **flags)
     steps = max(1, len(tr[0]) // batch)
     lr = WarmupCosineDecay(C.LR_S1, 3 * steps, epochs * steps)
@@ -120,7 +121,61 @@ def _train_one(flags, tr, va, epochs, batch, out_dir, label):
     
     model.fit(train_ds, validation_data=val_ds, epochs=epochs, verbose=2, callbacks=[ckpt_cb])
     return model
+'''
+def _train_one(flags, tr, va, epochs, batch, out_dir, label):
+    import tensorflow as tf
+    import os
+    from eca_ldnet.callbacks import WarmupCosineDecay
+    from eca_ldnet.losses import combined_loss, mae_metric, psnr_metric, ssim_metric
+    from eca_ldnet.model import build_eca_ldnet
 
+    tf.keras.backend.clear_session()
+
+    resume_from = "Full_(ECA+PA+Physics)_epoch_28.keras"  # change this path
+
+    steps = max(1, len(tr[0]) // batch)
+    lr = WarmupCosineDecay(C.LR_S1, 3 * steps, epochs * steps)
+
+    model = tf.keras.models.load_model(
+        resume_from,
+        custom_objects={
+            "combined_loss": combined_loss,
+            "mae_metric": mae_metric,
+            "psnr_metric": psnr_metric,
+            "ssim_metric": ssim_metric,
+            "WarmupCosineDecay": WarmupCosineDecay,
+        },
+    )
+
+    model.compile(
+        optimizer=tf.keras.optimizers.AdamW(learning_rate=lr, weight_decay=1e-4),
+        loss=combined_loss,
+        metrics=[psnr_metric, ssim_metric, mae_metric],
+    )
+
+    train_ds = build_dataset(tr[0], tr[1], augment=True, batch=batch)
+    val_ds = build_dataset(va[0], va[1], augment=False, batch=batch, shuffle=False, cache_ds=True)
+    
+    safe_label = label.replace('/', '_').replace(' ', '_')
+    ckpt_path = os.path.join(out_dir, f"{safe_label}_epoch_{'{epoch:02d}'}.keras")
+    
+    ckpt_cb = tf.keras.callbacks.ModelCheckpoint(
+        filepath=ckpt_path, 
+        save_weights_only=False, 
+        verbose=1, 
+        save_freq=7 * steps
+    )
+    
+    model.fit(
+        train_ds,
+        validation_data=val_ds,
+        epochs=50,
+        initial_epoch=27,
+        verbose=2,
+        callbacks=[ckpt_cb],
+    )
+
+    return model
 
 def main():
     p = argparse.ArgumentParser(description="ECA-LDNet ablation + perceptual metrics")
