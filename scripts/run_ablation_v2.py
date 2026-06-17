@@ -122,6 +122,7 @@ def _train_one(flags, tr, va, epochs, batch, out_dir, label):
     model.fit(train_ds, validation_data=val_ds, epochs=epochs, verbose=2, callbacks=[ckpt_cb])
     return model
 '''
+
 def _train_one(flags, tr, va, epochs, batch, out_dir, label):
     import tensorflow as tf
     import os
@@ -130,8 +131,9 @@ def _train_one(flags, tr, va, epochs, batch, out_dir, label):
     from eca_ldnet.model import build_eca_ldnet
 
     tf.keras.backend.clear_session()
-
-    resume_from = "Full_(ECA+PA+Physics)_epoch_28.keras"  # change this path
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(script_dir, "Full_(ECA+PA+Physics)_epoch_28.keras")
+    resume_from = file_path  # change this path
 
     steps = max(1, len(tr[0]) // batch)
     lr = WarmupCosineDecay(C.LR_S1, 3 * steps, epochs * steps)
