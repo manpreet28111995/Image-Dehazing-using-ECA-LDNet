@@ -14,7 +14,7 @@ Example (Kaggle paths):
         --reside6k /kaggle/input/.../RESIDE-6K \
         --its /kaggle/input/.../ITS \
         --sots /kaggle/input/.../SOTS \
-        --epochs 40 --out /kaggle/working/ablation
+        --epochs 28 --out /kaggle/working/ablation
 
 Notes
 -----
@@ -35,13 +35,12 @@ import sys
 # Allow running from the repo root without installing the package.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import numpy as np  # noqa: E402
-
-from eca_ldnet import config as C  # noqa: E402
-from eca_ldnet.data import (  # noqa: E402
+import numpy as np
+from eca_ldnet import config as C 
+from eca_ldnet.data import (  
     build_dataset, collect_pairs, find_dir, get_gt_path, load_image_pair, set_global_seed,
 )
-from eca_ldnet.metrics import lpips_available, lpips_distance, ms_ssim, psnr, ssim  # noqa: E402
+from eca_ldnet.metrics import lpips_available, lpips_distance, ms_ssim, psnr, ssim
 
 VARIANTS = [
     ("Full (ECA+PA+Physics)", dict()),
@@ -112,7 +111,7 @@ def _train_one(flags, tr, va, epochs, batch):
 def main():
     p = argparse.ArgumentParser(description="ECA-LDNet ablation + perceptual metrics")
     p.add_argument("--reside6k"); p.add_argument("--its"); p.add_argument("--sots")
-    p.add_argument("--epochs", type=int, default=40)
+    p.add_argument("--epochs", type=int, default=28)
     p.add_argument("--batch", type=int, default=16)
     p.add_argument("--limit", type=int, default=None, help="cap test images (debug)")
     p.add_argument("--pretrained", default=None, help="release .keras to eval with perceptual metrics")
