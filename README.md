@@ -5,8 +5,10 @@ dehazing. ECA-LDNet pairs **Efficient Channel Attention (ECA)** with
 **Pixel (spatial) Attention** inside a depthwise-separable U-Net, and embeds an
 **Atmospheric-Scattering-Model (ASM) physics-correction layer** that estimates
 atmospheric light `A` and a transmission map `t` to refine the output. It reaches
-**32.53 dB / 0.972 SSIM on SOTS-Indoor** with ~13 FPS inference — competitive with
-models 17× larger.
+**32.53 dB / 0.972 SSIM on SOTS-Indoor** at a verified **2.171 GMACs** (4.343 GFLOPs,
+256×256). It is positioned as a compact, component-analyzed design, **not** as a
+state-of-the-art or lowest-compute model: FFA-Net and the DehazeFormer family reach
+higher fidelity at greater cost.
 
 > This repository is a cleaned, installable, and tested refactor of the original
 > research notebooks. The model code now lives in the `eca_ldnet/` package, with
@@ -20,20 +22,28 @@ models 17× larger.
 - **Dual attention:** ECA (channel) + Pixel Attention (spatial) in every residual block.
 - **Physics-guided:** transmission-derived haze-density gating in the decoder and an
   ASM correction head (`J = (I − A)/(t + ε) + A`) blended into the output.
-- **Real-time:** ~72–82 ms / 256×256 image (≈12–14 FPS) on a single GPU.
+- **Interactive-rate:** ~72–82 ms / 256×256 image (≈12–14 FPS) on an NVIDIA Tesla P100; device-specific, not an edge-device or universal real-time claim.
+- **Verified compute:** 2.171 GMACs / 4.343 GFLOPs at 256×256 from a layer-wise counter (`scripts/count_macs.py`).
 - **Reproducible:** multi-stage progressive training (Charbonnier + SSIM + edge + FFT + VGG perceptual).
 
 ## Benchmark Results
 
-| Method | Year | Attention | PSNR (SOTS-Indoor) | SSIM | Params |
-|---|---|---|---|---|---|
-| DCP | 2009 | None | 16.62 | 0.818 | — |
-| AOD-Net | 2017 | None | 19.06 | 0.850 | 0.002M |
-| GridDehazeNet | 2019 | Attention | 32.16 | 0.984 | 0.956M |
-| FFA-Net | 2020 | CBAM | 36.39 | 0.989 | 4.456M |
-| DehazeFormer-B | 2023 | Coord. Attn | 33.26 | 0.983 | 25.44M |
-| **ECA-LDNet (Ours)** | **2026** | **ECA + Pixel** | **32.53** | **0.972** | **1.482M** |
+Baseline figures are quoted from the cited literature and use ITS-only training,
+whereas ECA-LDNet uses a mixed RESIDE-6K + ITS corpus, so this comparison is
+indicative rather than controlled (see the paper, Table I).
 
+| Method | Year | PSNR (SOTS-Indoor) | SSIM | Params |
+|---|---|---|---|---|
+| DCP | 2009 | 16.62 | 0.8546 | — |
+| AOD-Net | 2017 | 20.51 | 0.8160 | 0.002M |
+| GridDehazeNet | 2019 | 32.16 | 0.9836 | 0.956M |
+| FFA-Net | 2020 | 36.39 | 0.9886 | 4.456M |
+| DehazeFormer-S | 2023 | 36.82 | 0.9920 | 1.283M |
+| DehazeFormer-B | 2023 | 37.84 | 0.9940 | 2.514M |
+| DehazeFormer-L | 2023 | 40.05 | 0.9960 | 25.44M |
+| **ECA-LDNet (Ours)** | **2026** | **32.53** | **0.9717** | **1.482M** |
+
+ECA-LDNet does not lead SOTS-Indoor; FFA-Net and the DehazeFormer family are higher.
 Full results across benchmarks (released `stage5` model):
 
 | Dataset | PSNR (dB) | SSIM |

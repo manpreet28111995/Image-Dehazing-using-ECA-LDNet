@@ -108,6 +108,35 @@ def _train_one(flags, tr, va, epochs, batch):
     return model
 
 
+def _aggregate(per_seed_rows):
+    """Group per-(variant,seed) rows by variant and return mean/std for every
+    numeric metric across seeds. Returns one summary row per variant with
+    `<metric>_mean` and `<metric>_std` fields (std is population std, 0 for n=1)."""
+    from collections import defaultdict
+
+    groups = defaultdict(list)
+    for r in per_seed_rows:
+        groups[r["variant"]].append(r)
+
+    metric_keys = sorted({
+        k for r in per_seed_rows for k, v in r.items()
+        if k not in ("variant", "seed", "params") and isinstance(v, (int, float))
+    })
+
+    summary = []
+    for variant, rs in groups.items():
+        out = {"variant": variant, "n_seeds": len(rs), "params": rs[0].get("params")}
+        for mk in metric_keys:
+            vals = [r[mk] for r in rs if isinstance(r.get(mk), (int, float))]
+            if vals:
+                mean = sum(vals) / len(vals)
+                var = sum((x - mean) ** 2 for x in vals) / len(vals)
+                out[f"{mk}_mean"] = round(mean, 6)
+                out[f"{mk}_std"] = round(var ** 0.5, 6)
+        summary.append(out)
+    return summary
+
+
 def main():
     p = argparse.ArgumentParser(description="ECA-LDNet ablation + perceptual metrics")
     p.add_argument("--reside6k"); p.add_argument("--its"); p.add_argument("--sots")
@@ -115,16 +144,23 @@ def main():
     p.add_argument("--batch", type=int, default=16)
     p.add_argument("--limit", type=int, default=None, help="cap test images (debug)")
     p.add_argument("--pretrained", default=None, help="release .keras to eval with perceptual metrics")
+    p.add_argument("--seeds", default=str(C.SEED),
+                   help="comma-separated training seeds, e.g. '42,123,7'. "
+                        "Multiple seeds produce a mean+/-std summary for statistical significance.")
     p.add_argument("--out", default="./ablation_out")
     args = p.parse_args()
     os.makedirs(args.out, exist_ok=True)
-    set_global_seed(C.SEED)
+
+    seeds = [int(s) for s in str(args.seeds).split(",") if s.strip()]
 
     from sklearn.model_selection import train_test_split
     pairs = _gather_train(args.reside6k, args.its)
     if not pairs:
         raise SystemExit("No training pairs found; check --reside6k / --its.")
     hz, gt = [p[0] for p in pairs], [p[1] for p in pairs]
+    # The data split is held fixed (random_state=C.SEED) across all seeds, so the
+    # reported variance reflects training/initialization stochasticity rather than
+    # a changing train/val partition.
     tr_h, va_h, tr_g, va_g = train_test_split(hz, gt, test_size=0.10, random_state=C.SEED)
 
     sin_h = find_dir(args.sots, ["indoor/hazy", "SOTS/indoor/hazy"]) if args.sots else None
@@ -132,40 +168,58 @@ def main():
     r6_h = find_dir(args.reside6k, ["test/hazy", "Test/hazy"]) if args.reside6k else None
     r6_g = find_dir(args.reside6k, ["test/GT", "test/gt", "test/clear"]) if args.reside6k else None
 
-    rows = []
-    for label, flags in VARIANTS:
-        from eca_ldnet.model import build_eca_ldnet
-        nparams = build_eca_ldnet(name="count", **flags).count_params()
-        print(f"\n===== Training variant: {label}  ({nparams:,} params) =====")
-        model = _train_one(flags, (tr_h, tr_g), (va_h, va_g), args.epochs, args.batch)
-        row = {"variant": label, "params": nparams}
-        ind = _eval_dir(model, sin_h, sin_g, args.limit)
-        r6k = _eval_dir(model, r6_h, r6_g, args.limit)
-        if ind:
-            row.update({f"sots_indoor_{k}": v for k, v in ind.items()})
-        if r6k:
-            row.update({f"reside6k_{k}": v for k, v in r6k.items()})
-        rows.append(row)
-        print(f"  {label}: SOTS-Indoor={ind}  RESIDE-6K={r6k}")
+    per_seed_rows = []
+    for seed in seeds:
+        print(f"\n########## SEED {seed} ##########")
+        for label, flags in VARIANTS:
+            from eca_ldnet.model import build_eca_ldnet
+            set_global_seed(seed)
+            nparams = build_eca_ldnet(name="count", **flags).count_params()
+            print(f"\n===== [seed {seed}] Training variant: {label}  ({nparams:,} params) =====")
+            model = _train_one(flags, (tr_h, tr_g), (va_h, va_g), args.epochs, args.batch)
+            row = {"variant": label, "seed": seed, "params": nparams}
+            ind = _eval_dir(model, sin_h, sin_g, args.limit)
+            r6k = _eval_dir(model, r6_h, r6_g, args.limit)
+            if ind:
+                row.update({f"sots_indoor_{k}": v for k, v in ind.items()})
+            if r6k:
+                row.update({f"reside6k_{k}": v for k, v in r6k.items()})
+            per_seed_rows.append(row)
+            print(f"  [seed {seed}] {label}: SOTS-Indoor={ind}  RESIDE-6K={r6k}")
 
     if args.pretrained:
         from eca_ldnet.model import load_pretrained
         m = load_pretrained(args.pretrained)
         print("\n===== Released checkpoint perceptual metrics =====")
-        rows.append({"variant": "Released (paper) checkpoint", "params": m.count_params(),
-                     **{f"sots_indoor_{k}": v for k, v in (_eval_dir(m, sin_h, sin_g, args.limit) or {}).items()},
-                     **{f"reside6k_{k}": v for k, v in (_eval_dir(m, r6_h, r6_g, args.limit) or {}).items()}})
+        per_seed_rows.append({"variant": "Released (paper) checkpoint", "seed": -1, "params": m.count_params(),
+                              **{f"sots_indoor_{k}": v for k, v in (_eval_dir(m, sin_h, sin_g, args.limit) or {}).items()},
+                              **{f"reside6k_{k}": v for k, v in (_eval_dir(m, r6_h, r6_g, args.limit) or {}).items()}})
 
-    keys = sorted({k for r in rows for k in r})
-    csv_path = os.path.join(args.out, "ablation_results.csv")
-    with open(csv_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=keys); w.writeheader(); w.writerows(rows)
-    print(f"\nSaved {csv_path}")
-    # human-readable summary
-    for r in rows:
-        si = r.get("sots_indoor_psnr"); ss = r.get("sots_indoor_ssim")
-        print(f"  {r['variant']:<28} params={r['params']:>10,}  "
-              f"SOTS-Indoor PSNR={si if si is None else round(si,2)} SSIM={ss if ss is None else round(ss,4)}")
+    # Always write the raw per-(variant,seed) rows.
+    keys = sorted({k for r in per_seed_rows for k in r})
+    raw_path = os.path.join(args.out, "ablation_results.csv" if len(seeds) == 1
+                            else "ablation_results_per_seed.csv")
+    with open(raw_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=keys); w.writeheader(); w.writerows(per_seed_rows)
+    print(f"\nSaved {raw_path}")
+
+    # With multiple seeds, also write the mean+/-std summary used for the paper table.
+    if len(seeds) > 1:
+        summary = _aggregate(per_seed_rows)
+        skeys = sorted({k for r in summary for k in r})
+        sum_path = os.path.join(args.out, "ablation_results_summary.csv")
+        with open(sum_path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=skeys); w.writeheader(); w.writerows(summary)
+        print(f"Saved {sum_path}  ({len(seeds)} seeds: {seeds})")
+        for r in summary:
+            mp = r.get("sots_indoor_psnr_mean"); sp = r.get("sots_indoor_psnr_std")
+            if mp is not None:
+                print(f"  {r['variant']:<28} SOTS-Indoor PSNR = {mp:.2f} +/- {sp:.2f} dB  (n={r['n_seeds']})")
+    else:
+        for r in per_seed_rows:
+            si = r.get("sots_indoor_psnr"); ss = r.get("sots_indoor_ssim")
+            print(f"  {r['variant']:<28} params={r['params']:>10,}  "
+                  f"SOTS-Indoor PSNR={si if si is None else round(si,2)} SSIM={ss if ss is None else round(ss,4)}")
 
 
 if __name__ == "__main__":
