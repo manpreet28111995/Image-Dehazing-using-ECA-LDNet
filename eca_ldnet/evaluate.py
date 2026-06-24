@@ -54,8 +54,56 @@ def evaluate_dataset(model, hazy_dir, gt_dir, name="", limit=None):
     return float(np.mean(psnrs)), float(np.mean(ssims))
 
 
+def _layer_macs(layer):
+    """Analytic multiply-accumulate count for one Keras layer from its config."""
+    cls = layer.__class__.__name__
+    try:
+        out = layer.output.shape
+    except Exception:
+        return 0
+
+    def spatial(shape):
+        dims = [d for d in shape[1:-1] if d is not None]
+        p = 1
+        for d in dims:
+            p *= int(d)
+        return p
+
+    if cls == "Conv2D":
+        kh, kw = layer.kernel_size
+        cin = int(layer.input.shape[-1]); cout = int(out[-1])
+        g = getattr(layer, "groups", 1) or 1
+        return spatial(out) * cout * (cin // g) * kh * kw
+    if cls == "DepthwiseConv2D":
+        kh, kw = layer.kernel_size
+        cin = int(layer.input.shape[-1]); dm = getattr(layer, "depth_multiplier", 1)
+        return spatial(out) * cin * dm * kh * kw
+    if cls == "SeparableConv2D":
+        kh, kw = layer.kernel_size
+        cin = int(layer.input.shape[-1]); cout = int(out[-1])
+        return spatial(out) * cin * kh * kw + spatial(out) * cout * cin
+    if cls == "Conv1D":
+        (k,) = layer.kernel_size
+        cin = int(layer.input.shape[-1]); cout = int(out[-1])
+        steps = int(out[1]) if out[1] is not None else 1
+        return steps * cout * cin * k
+    if cls == "Dense":
+        cin = int(layer.input.shape[-1]); units = int(out[-1])
+        lead = 1
+        for d in out[1:-1]:
+            if d is not None:
+                lead *= int(d)
+        return lead * cin * units
+    return 0
+
+
+def analytic_macs(model):
+    """Valid layer-wise MAC total (sums per-layer analytic costs)."""
+    return sum(_layer_macs(l) for l in model.layers)
+
+
 def measure_latency_and_flops(model, runs=100, warmup=20):
-    """Wall-clock latency / FPS plus a rough MACs estimate for the model."""
+    """Wall-clock latency / FPS plus a valid layer-wise MAC count for the model."""
     dummy = np.random.rand(1, IMG_SIZE, IMG_SIZE, 3).astype(np.float32)
     for _ in range(warmup):
         model.predict(dummy, verbose=0)
@@ -64,7 +112,7 @@ def measure_latency_and_flops(model, runs=100, warmup=20):
         model.predict(dummy, verbose=0)
     avg_ms = ((time.time() - t0) / runs) * 1000.0
     params_m = model.count_params() / 1e6
-    macs_g = (model.count_params() * IMG_SIZE * IMG_SIZE) / 1e9
+    macs_g = analytic_macs(model) / 1e9  # exact layer-wise count, not params*H*W
     return {"avg_ms": avg_ms, "fps": 1000.0 / avg_ms, "macs_g": macs_g, "params_m": params_m}
 
 
